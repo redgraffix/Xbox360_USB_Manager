@@ -17,7 +17,7 @@ from test_converter import TestDrive, make_iso
 class SecurityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='xbox-security-')
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.engines = []
 
     def tearDown(self):

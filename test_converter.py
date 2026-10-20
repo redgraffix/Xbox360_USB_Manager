@@ -43,7 +43,7 @@ class TestDrive:
 
 class ConverterTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(prefix='xbox-test-'); self.root=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory(prefix='xbox-test-'); self.root=Path(self.tmp.name).resolve()
         self.base=self.root/'input'; self.drive=TestDrive(self.root/'usb')
         self.eng=engine.Engine(self.base,TOOL,self.drive,settle_seconds=0)
         # Deletion tests explicitly opt in; fresh installations keep their sources.

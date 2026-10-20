@@ -10,7 +10,7 @@ from test_converter import make_iso, TestDrive
 
 def main():
     with tempfile.TemporaryDirectory(prefix='xbox-ui-test-') as directory:
-        rootpath=Path(directory); inputpath=rootpath/'input'; drive=TestDrive(rootpath/'test-usb')
+        rootpath=Path(directory).resolve(); inputpath=rootpath/'input'; drive=TestDrive(rootpath/'test-usb')
         engine=Engine(inputpath,find_7zip(),drive,settle_seconds=0)
         make_iso(inputpath/'Interface Test (USA).iso')
         window=tk.Tk(); app=App(window,engine); window.title('Converter interface test')

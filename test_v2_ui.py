@@ -10,7 +10,7 @@ from library import scan_library
 results={}
 def main():
     with tempfile.TemporaryDirectory(prefix='xbox-v2-ui-') as tmp:
-        base=Path(tmp);drive=TestDrive(base/'usb');e=Engine(base/'input',find_7zip(),drive,settle_seconds=0)
+        base=Path(tmp).resolve();drive=TestDrive(base/'usb');e=Engine(base/'input',find_7zip(),drive,settle_seconds=0)
         iso=e.base/'UI game.iso';make_iso(iso);e.delete_sources=False
         root=tk.Tk();app=App(root,e)
         try:

@@ -18,7 +18,7 @@ def pump(root,predicate=lambda:False,seconds=5):
     return predicate()
 def main():
     with tempfile.TemporaryDirectory(prefix='xbox-v21-regression-') as tmp:
-        base=Path(tmp);drive=TestDrive(base/'usb');e=Engine(base/'input',find_7zip(),drive,settle_seconds=0)
+        base=Path(tmp).resolve();drive=TestDrive(base/'usb');e=Engine(base/'input',find_7zip(),drive,settle_seconds=0)
         iso=e.base/'Start button test.iso';make_iso(iso);e.delete_sources=False
         root=tk.Tk();app=App(root,e);release=threading.Event();entered=threading.Event()
         def slow_scan(*args):
