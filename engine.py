@@ -99,7 +99,7 @@ class Engine:
         atomic_json(self.settings_file,self.settings,True);self.save()
     def configure(self,settings):
         with self.guard:
-            if self.active_id or self.maintenance:raise ValueError('Pause and finish the current operation before changing settings')
+            if self.active_id or self.maintenance:raise ValueError('Pause and finish the current import before changing settings')
             new={**self.settings,**settings};inp=Path(new['input']).absolute();temp=Path(new['temp']).absolute()
             safe_path(inp,inp);safe_path(temp,temp)
             if not inp.is_dir():raise ValueError('Choose an existing source folder')
@@ -130,9 +130,14 @@ class Engine:
                     j['hidden']=True;count+=1
             self.save(required=True)
             return count
+    def keep_originals(self,ids):
+        with self.guard:
+            for job in self.jobs:
+                if job['id'] in ids and job['state']=='Complete':job['cleanup_pending']=False
+            self.save(required=True)
     def begin_maintenance(self):
         with self.guard:
-            if self.active_id or self.maintenance:raise ValueError('Wait for the current file to finish first.')
+            if self.active_id or self.maintenance:raise ValueError('Wait for the current import to finish first.')
             self.enabled=False;self.maintenance=True;self.management_cancel.clear()
     def end_maintenance(self):
         with self.guard:self.maintenance=False
@@ -216,13 +221,13 @@ class Engine:
     def _checkpoint(self,root):
         if self.cancel.is_set() or self.closing.is_set():raise Cancelled()
         self.drive.check(root)
-    def _metadata_match(self,root,metadata,excluded):
+    def _metadata_match(self,root,metadata,excluded,checkpoint=lambda:None):
         required=('title_id','media_id','version','disc')
         if not all(k in metadata for k in required) or metadata.get('media_id')=='00000000':return None
         def same(other):return all(other.get(k)==metadata[k] for k in required)
         games=root/self.settings['games']
         if games.exists():
-            for executable in games.rglob('default.xex'):
+            for executable in game_executables(games,checkpoint):
                 safe_path(executable,games)
                 if executable.parent not in excluded and same(xex_info(executable)):return executable.parent
         packages=root/'Content'/'0000000000000000'/metadata['title_id']/'00007000'
@@ -242,12 +247,11 @@ class Engine:
         root=self.drive.locate();self.drive.check(root)
         staging_root=safe_path(root/'Xbox360-Conversion-Staging'/'Converter',root)
         staging=safe_path(staging_root/j['id'],staging_root);local=safe_path(self.work/j['id'],self.work)
-        for p,r in ((staging,staging_root),(local,self.work)):safe_remove_tree(p,r)
         j['temp_paths']=[str(local),str(staging)]
         policy=self.settings['cleanup'] if self.batch_policy=='default' else self.batch_policy
         if self.batch_policy=='default' and self.settings['cleanup']!='ask':policy='delete' if self.delete_sources else 'keep'
         j['cleanup_policy']=policy;j['drive_identity']=copy.deepcopy(self.settings['drive'])
-        owned_before=set(j.get('outputs',[]));last=[0.0];last_drive=[0.0];started=time.monotonic();units=[];unknown=[];iso_list=[];manifest_records=[]
+        owned_before=set(j.get('outputs',[]));last=[0.0];last_drive=[0.0];last_save=[0.0];started=time.monotonic();units=[];unknown=[];iso_list=[];manifest_records=[]
         def checkpoint():
             if self.cancel.is_set() or self.closing.is_set():raise Cancelled()
             if time.monotonic()-last_drive[0]>1:self.drive.check(root);last_drive[0]=time.monotonic()
@@ -255,17 +259,25 @@ class Engine:
             now=time.monotonic()
             if now-last[0]<.25 and done!=total and j['state']==phase:return
             last[0]=now;self.update(j,state=phase,percent=min(100,100*done/total) if total else 100,done=done,total=total,detail=detail,elapsed=now-started)
+            if now-last_save[0]>10:self.save();last_save[0]=now
         def convert_iso(iso,label,index):
             with locked_reader(iso) as image:
                 entries=manifest(image);total=sum(n for _,_,n in entries)
-                if shutil.disk_usage(root).free<2*total+GIB:raise OSError('USB needs space for prepared files and verified output: '+f'{(2*total+GIB)/GIB:.1f} GB')
                 target=staging/'converted'/str(index)
-                extract_and_verify(image,entries,target,progress,checkpoint)
-            got,nested,unhandled=inspect_tree(target,label)
-            if nested:raise ValueError('Unexpected nested disc images inside ISO')
-            units.extend(got);unknown.extend(unhandled)
+                if not target.exists() and shutil.disk_usage(root).free<total+GIB:raise OSError('USB needs space for game files: '+f'{(total+GIB)/GIB:.1f} GB')
+                hashes=extract_and_verify(image,entries,target,progress,checkpoint)
+            # Publish the verified ISO stage by rename, without another USB copy.
+            unit=game_unit(target,label,[(target/p,p) for p,_,_ in entries])
+            unit['verified_stage']=target;unit['verified_hashes']=hashes
+            unit['verified_stamp']={p.lower():(s['size'],s['mtime_ns']) for p,s in hashes.items()}
+            units.append(unit)
         self.update(j,state='Checking',detail='Detecting ISO, prepared game, GOD, DLC or update content',percent=0)
         try:
+            # Keep only ISO stages for checked recovery after an interruption.
+            # Re-extract archives; a cached ISO's size alone proves nothing.
+            for p,r in ((local,self.work),(staging/'archive',staging),(staging/'publish',staging)):
+                progress('Checking',0,1,'Removing incomplete temporary work')
+                safe_remove_tree(p,r,checkpoint)
             with (locked_reader(source) if source.is_file() else contextlib.nullcontext()):
                 if source.suffix.lower()=='.iso':convert_iso(source,source.stem,0)
                 elif source.suffix.lower() in {'.zip','.7z'}:
@@ -289,10 +301,10 @@ class Engine:
                         if unpack.is_relative_to(staging) and shutil.disk_usage(root).free<2*total+GIB:raise OSError('USB needs room for extraction and verified content')
                         if any(r['size']>0xFFFFFFFF for r in records) and any(str(disk).startswith(v['root']) and v['filesystem']=='FAT32' for v in volumes()):raise ValueError('Select NTFS/exFAT temporary storage for files over 4 GB')
                         unpack_all(self.tool,source,unpack,records,progress,checkpoint)
-                        got,isos,extra=inspect_tree(unpack,source.stem);units.extend(got);unknown.extend(extra)
+                        got,isos,extra=inspect_tree(unpack,source.stem,checkpoint);units.extend(got);unknown.extend(extra)
                         for i,iso in enumerate(isos):convert_iso(iso,iso.stem,i)
                 elif source.is_dir():
-                    got,isos,extra=inspect_tree(source,source.name);units.extend(got);unknown.extend(extra)
+                    got,isos,extra=inspect_tree(source,source.name,checkpoint);units.extend(got);unknown.extend(extra)
                     for i,iso in enumerate(isos):convert_iso(iso,iso.stem,i)
                 else:
                     info=package_info(source)
@@ -316,31 +328,43 @@ class Engine:
                         if str(target).casefold() in all_targets:raise ContentConflict('Two items in this input use the same destination')
                         all_targets.add(str(target).casefold())
                     if u['kind'] in {'Extracted game','Games on Demand'}:
-                        match=self._metadata_match(root,u['metadata'],targets)
+                        progress('Checking',0,1,'Checking for an existing copy')
+                        match=self._metadata_match(root,u['metadata'],targets,checkpoint)
                         if match:self.log('Similar game metadata at '+str(match)+'; metadata alone does not establish a duplicate.')
                     exists=[p.exists() for p in targets]
                     if any(exists):
                         if not all(exists):raise ContentConflict('An incomplete copy already exists at '+str(dest))
                         if not package:
                             expected={r.as_posix().casefold():p.stat().st_size for p,r in u['files']}
-                            if actual_files(dest)!=expected:raise ContentConflict('Different files already exist at '+str(dest))
+                            if actual_files(dest,checkpoint)!=expected:raise ContentConflict('Different files already exist at '+str(dest))
                         try:hashes=verify_files(u['files'],dest,progress,checkpoint)
                         except ValueError as e:raise ContentConflict('Files at '+str(dest)+' differ from this input; nothing was overwritten.') from e
                     else:
                         if not package:
                             exe=next((p for p,r in u['files'] if r.as_posix().lower()=='default.xex'),None)
-                            fingerprint=identity([(r,0,p.stat().st_size) for p,r in u['files']],exe.read_bytes()) if exe and exe.stat().st_size<=128*1024*1024 else None
+                            sizes=u.get('verified_hashes')
+                            executable_bytes=exe.read_bytes() if exe and exe.stat().st_size<=128*1024*1024 else None
+                            fingerprint=identity([(r,0,sizes[r.as_posix()]['size'] if sizes is not None else p.stat().st_size) for p,r in u['files']],executable_bytes) if executable_bytes is not None else None
                             games=root/self.settings['games']
                             if fingerprint and games.exists():
-                                for existing in games.rglob('default.xex'):
+                                for existing in game_executables(games,checkpoint):
                                     checkpoint();safe_path(existing,games)
-                                    if folder_identity(existing.parent)==fingerprint:
+                                    # Different executable: no need to enumerate all its assets.
+                                    if existing.stat().st_size!=len(executable_bytes):continue
+                                    with locked_reader(existing) as f:
+                                        if f.read()!=executable_bytes:continue
+                                    if folder_identity(existing.parent,checkpoint)==fingerprint:
                                         try:verify_files(u['files'],existing.parent,progress,checkpoint)
                                         except ValueError:continue
                                         raise Duplicate('Identical game content verified at '+str(existing.parent))
-                        need=sum(p.stat().st_size for p,_ in u['files'])
-                        if shutil.disk_usage(root).free<need+GIB:raise OSError('Not enough USB free space')
-                        stage=staging/'publish'/str(i);hashes=verify_files(u['files'],stage,progress,checkpoint,True)
+                        if 'verified_stage' in u:
+                            stage=safe_path(u['verified_stage'],staging);hashes=u['verified_hashes']
+                            stamp={p.relative_to(stage).as_posix().lower():(s.st_size,s.st_mtime_ns) for p,s in walk_files(stage,checkpoint)}
+                            if stamp!=u['verified_stamp']:raise ValueError('Verified stage changed before publication; original retained')
+                        else:
+                            need=sum(p.stat().st_size for p,_ in u['files'])
+                            if shutil.disk_usage(root).free<need+GIB:raise OSError('Not enough USB free space')
+                            stage=staging/'publish'/str(i);hashes=verify_files(u['files'],stage,progress,checkpoint,True)
                         checkpoint();dest.parent.mkdir(parents=True,exist_ok=True)
                         if package:
                             dest.mkdir(exist_ok=True)
@@ -366,11 +390,12 @@ class Engine:
             j['setup_note']='Check/enable title updates on Xbox.' if any(u['kind']=='Title update' for u in units) else ('Installation content included; some titles need Xbox setup.' if any(u['kind'] in {'Install disc','DLC / install content'} for u in units) else 'Files verified; launch on Xbox to test.')
             self.update(j,state='Complete',percent=100,detail=text,elapsed=time.monotonic()-started)
         finally:
-            if self.settings['clean_temp']:
+            # Stop promptly; leave owned work for a checked retry or later cleanup.
+            if self.settings['clean_temp'] and not (self.cancel.is_set() or self.closing.is_set()):
                 for p,r in ((local,self.work),(staging,staging_root)):
                     try:
                         if p==staging:self.drive.check(root)
-                        safe_remove_tree(p,r)
+                        safe_remove_tree(p,r,checkpoint)
                     except Exception as e:self.log('Temporary cleanup deferred: '+str(e))
     def _delete_source(self,j,expected):
         p=safe_path(j['source'],j['source_root'])

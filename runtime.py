@@ -4,6 +4,11 @@ import os
 from pathlib import Path
 
 
+def default_base():
+    """Use a private per-user folder, independent of the executable's location."""
+    return Path.home() / 'XBOX360-Convert'
+
+
 def find_7zip(explicit=None):
     """An explicit path/environment override is a trusted local configuration."""
     override = explicit or os.environ.get('XBOX360_7ZIP')

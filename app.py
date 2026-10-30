@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from core import NamedLock, GIB, Cancelled
 from engine import Engine, ACTIVE
-from runtime import find_7zip
+from runtime import find_7zip, default_base
 from content import volumes, tree_bytes
 from library import scan_library, remove_components
 BG='#151b18';PANEL='#202a24';FG='#edf1ed';MUTED='#a9b8ad';GREEN='#92d34f';LINE='#35453a'
@@ -246,11 +246,12 @@ class App:
         ids=list(ids or self.history.selection());jobs=[j for j in self.engine.jobs if j['id'] in ids and j['state']=='Complete' and j.get('source_retained') and j.get('verification_manifest') and Path(j['source']).exists()]
         if not jobs:messagebox.showinfo('No originals selected','Select completed imports with retained originals and saved verification records.',parent=self.root);return
         text='\n'.join(j['source'] for j in jobs)
-        if not messagebox.askyesno('Delete verified originals?',f"Recheck USB files, then permanently delete these originals?\n\n{text}",parent=self.root):return
+        if not messagebox.askyesno('Delete verified originals?',f"Recheck USB files, then permanently delete these originals?\nChoose No to keep them.\n\n{text}",parent=self.root):
+            self.call(lambda:self.engine.keep_originals([j['id'] for j in jobs]));return
         self.background(lambda:self.engine.cleanup_originals([j['id'] for j in jobs]),lambda _:self.finish_cleanup(),'Verifying USB before original cleanup…')
     def finish_cleanup(self):self.last_history=None;self.game_detail.set('Original cleanup complete; USB output retained.')
     def settings(self):
-        if self.engine.active_id or self.busy:messagebox.showinfo('File operation running','Pause the queue and let the current file finish before changing Settings.',parent=self.root);return
+        if self.engine.active_id or self.busy:messagebox.showinfo('File operation running','Pause and finish the current import before changing Settings.',parent=self.root);return
         self.cancel_library();Settings(self)
     def render_history(self,snapshot):
         signature=tuple((j['id'],j['state'],j.get('source_retained'),j.get('hidden')) for j in snapshot['jobs'])+tuple(str(e) for e in self.engine.history_events)
@@ -304,7 +305,8 @@ class App:
         active=next((j for j in s['jobs'] if j['id']==s['active']),None)
         if active:
             self.bar['value']=active['percent'];elapsed=time.time()-active.get('phase_since',time.time())
-            self.progress_var.set(f"{active['name']} · {active['state']} {active['percent']:.0f}% · {duration(elapsed)} · {size(active.get('done',0))} / {size(active.get('total',0))}")
+            amount=active.get('detail','') if active['state']=='Checking' else f"{size(active.get('done',0))} / {size(active.get('total',0))}"
+            self.progress_var.set(f"{active['name']} · {active['state']} {active['percent']:.0f}% · {duration(elapsed)} · {amount}")
             if not self.tree.selection():self.detail_var.set(active['detail'])
         else:
             self.bar['value']=0;self.progress_var.set(self.operation_message if self.busy else ('Waiting for new files.' if s['enabled'] else 'Ready when you are. Click Start queue.'))
@@ -323,7 +325,7 @@ class App:
         if self.busy:
             self.engine.management_cancel.set()
             self.closing=True;self.cancel_library();self.engine.close();return
-        if self.engine.active_id and not messagebox.askyesno('Stop and close?','Stop the current import safely and retain its original?',parent=self.root):return
+        if self.engine.active_id and not messagebox.askyesno('Stop and close?','Stop the current import? Original files will be retained.',parent=self.root):return
         self.closing=True;self.cancel_library();self.engine.close()
 
 class Settings:
@@ -379,19 +381,29 @@ class Settings:
         except Exception as e:messagebox.showerror('Cleanup unavailable',str(e),parent=self.win)
 
 def main():
-    parser=argparse.ArgumentParser();default=Path(sys.executable).parent.parent if getattr(sys,'frozen',False) else Path.home()/'XBOX360-Convert'
-    parser.add_argument('--base',default=str(default),help='Local input, settings and history folder')
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--base',default=str(default_base()),help='Local input, settings and history folder')
     parser.add_argument('--seven-zip',help='Absolute path to a trusted 7z.exe installation')
+    parser.add_argument('--start-queue',action='store_true',help='Start queued work after opening the app')
+    parser.add_argument('--retry-interrupted',action='store_true',help='Retry interrupted jobs whose original inputs remain')
     args=parser.parse_args()
     if os.name != 'nt':parser.error('This app currently supports Windows only')
     try:tool=find_7zip(args.seven_zip)
-    except (ValueError,FileNotFoundError) as exc:parser.error(str(exc))
+    except (ValueError,FileNotFoundError) as exc:
+        ctypes.windll.user32.MessageBoxW(None,str(exc),'7-Zip required',0x10)
+        return 1
     try:instance=NamedLock(r'Local\Xbox360ConverterApp')
     except BlockingIOError:ctypes.windll.user32.MessageBoxW(None,'Xbox 360 Game Converter is already open.','Xbox 360 Game Converter',0x40);return
     try:
+        # Let interactive applications take priority during disk-heavy imports.
+        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(),0x4000)
         try:ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:pass
-        root=tk.Tk();App(root,Engine(Path(args.base),tool));root.mainloop()
+        engine=Engine(Path(args.base),tool)
+        if args.retry_interrupted:engine.retry([j['id'] for j in engine.jobs if j['state']=='Interrupted'])
+        root=tk.Tk();app=App(root,engine)
+        if args.start_queue:root.after(0,engine.enable)
+        root.mainloop()
     except Exception:ctypes.windll.user32.MessageBoxW(None,traceback.format_exc()[-3500:],'Could not start Xbox 360 Game Converter',0x10);raise
     finally:instance.close()
-if __name__=='__main__':main()
+if __name__=='__main__':sys.exit(main())

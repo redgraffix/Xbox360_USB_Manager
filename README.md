@@ -2,7 +2,7 @@
 
 A local Windows app for converting and transferring Xbox 360 game files to an external USB drive. It watches an input folder, processes one item at a time, verifies the output, and keeps a searchable USB game list and import history.
 
-The current window title is **Xbox 360 Game Converter**. This repository contains the working application's source and tests; a downloadable installer is not available yet.
+The window title is **Xbox 360 Game Converter**. Download the source using **Code → Download ZIP**, extract it, and follow the steps below. You can run the Python app directly or build a Windows executable. There is no prebuilt installer in this repository.
 
 ## What it does
 
@@ -14,7 +14,7 @@ The current window title is **Xbox 360 Game Converter**. This repository contain
 - Lists USB games, opens their folders, verifies recorded imports, and removes explicitly selected components.
 - Keeps import history separately from the visible queue. Clearing completed/error rows does not delete files or history.
 
-The app does not download games, modify console firmware, format drives, install trainers, or bypass content licensing. Use files you are authorized to use. The console must already support the content you are transferring.
+The app works with local files and makes no network requests. It does not download games, modify console firmware, format drives, install trainers, or bypass content licensing. Use files you are authorized to use. The console must already support the content you are transferring.
 
 ## Requirements
 
@@ -28,7 +28,13 @@ There are no third-party Python runtime packages to install, no account requirem
 
 ## Run from source
 
-Download the repository or clone it, then open PowerShell in its folder:
+Install Python and 7-Zip, download the repository using **Code → Download ZIP**, and **Extract All**. Open the extracted folder containing `app.py`, right-click inside it, choose **Open in Terminal**, and run:
+
+```powershell
+py -3 app.py
+```
+
+Alternatively, with Git installed:
 
 ```powershell
 git clone https://github.com/redgraffix/Xbox360_USB_Manager.git
@@ -51,6 +57,22 @@ py -3 app.py --base "$env:LOCALAPPDATA\Xbox360USBManager"
 ```
 
 `--base` controls where settings and history live. Changing the input folder in Settings does not relocate that history. Use a dedicated folder, separate from this source checkout, and do not share it publicly.
+
+## Build a Windows executable (optional)
+
+Run these commands in the extracted repository on Windows. Python 3.12 is used by the automated checks; a standard Python installation with Tkinter is recommended.
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe scripts\build_windows.py
+```
+
+Open `dist\Xbox360 Converter\Xbox360 Converter.exe`. Keep the **entire** `Xbox360 Converter` folder, including `_internal`; the executable alone will not work. Python is included in this build, so it is not required on the receiving PC. That PC still needs 7-Zip installed separately. The build is unsigned and does not install anything or format a drive.
+
+The build uses [PyInstaller's one-folder bundle](https://pyinstaller.org/en/stable/usage.html) and includes only application code and its runtime, not your input files, settings, history, USB identity, or logs. It copies the README and security notes into the output. Build dependencies and intermediate files stay in the ignored `.venv` and `build` directories; you can remove those after building. Keep `dist` if you want to keep the executable.
+
+To update an existing copy, close the app and rebuild or replace its complete application folder. Settings and history stay in your per-user `XBOX360-Convert` folder (or your explicit `--base` location). Both source and executable launches use the same default profile. A fresh profile starts paused, has no USB selected, and keeps originals.
 
 ## First import
 
@@ -93,7 +115,11 @@ Verification checks that output files match the input. It does **not** prove tha
 
 ## Storage, cleanup, and duplicate handling
 
-Imports are sequential. Disc extraction and publication use staging space, so the USB may need roughly twice the extracted content size plus a reserve during an import. Archived ISOs additionally need room in the selected temporary folder. Progress describes the current stage, not an overall time guarantee.
+Imports are sequential. ISO files are extracted once onto USB, compared byte-for-byte against the ISO, and published by renaming the verified staging folder. They need the extracted content size plus a reserve; prepared archives may still need roughly twice their extracted size. Archived ISOs additionally need room in the selected temporary folder. Progress describes the current stage, not an overall time guarantee.
+
+File inventory checks report progress and respond to Stop. An interrupted ISO stage can be reused only after full verification against the ISO; incomplete stages are rebuilt. Stop retains unfinished temporary work for retry or manual cleanup. Normal completion cleans temporary work when that setting is enabled. Disk flushes and full byte verification remain enabled.
+
+For an explicitly requested unattended restart, `--retry-interrupted --start-queue` retries interrupted inputs and starts the queue. Normal launches still start paused.
 
 - **Keep source files:** retains the input after a successful import.
 - **Delete source files:** permanently deletes the input only after content verification and successful recording of the result.
@@ -108,7 +134,7 @@ An older import without saved checksums cannot be fully verified from history; r
 
 ## Local data and privacy
 
-The app performs no network requests or telemetry. It reads local inputs and writes to the chosen storage locations. Its local data includes personal filesystem paths, volume labels/identifiers, game names, and operation history:
+The app makes no network requests and has no telemetry or account integration. Local data includes personal filesystem paths, volume labels/identifiers, game names, and operation history:
 
 | Location under the app base | Contents |
 | --- | --- |
@@ -127,14 +153,14 @@ See [SECURITY.md](SECURITY.md) for the trust model, limitations, and reporting g
 The source uses the Python standard library. Install 7-Zip before running the tests. From the repository root:
 
 ```powershell
-py -3 -m unittest -v test_converter test_imports test_security
+py -3 -m unittest -v test_converter test_imports test_security test_performance
 py -3 test_ui.py
 py -3 test_v2_ui.py
 py -3 test_ui_regression.py
 py -3 scripts/check_public_tree.py
 ```
 
-Tests use small synthetic disc/package fixtures and temporary folders with a fake USB drive. They do not require real games or write to a physical USB. The three UI tests briefly open test windows and require an interactive Windows desktop. The automated workflow runs the non-GUI tests and the repository hygiene check on Windows.
+Tests use small synthetic disc/package fixtures and temporary folders with a fake USB drive. They do not download games, require real games, or write to a physical USB. The three UI scripts briefly open test windows and require an interactive Windows desktop. The automated workflow runs the non-GUI tests, repository hygiene check, and an executable build/import smoke test on Windows.
 
 | File | Responsibility |
 | --- | --- |
@@ -143,12 +169,13 @@ Tests use small synthetic disc/package fixtures and temporary folders with a fak
 | `core.py` | Xbox filesystem parsing, path checks, byte verification, Windows locking |
 | `content.py` | Archive inspection, content metadata, prepared-file copies |
 | `library.py` | USB inventory and selected-component removal |
-| `runtime.py` | Explicit/trusted-location 7-Zip lookup |
+| `runtime.py` | Per-user defaults and explicit/trusted-location 7-Zip lookup |
+| `scripts/build_windows.py` | Optional Windows executable build |
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before adding fixtures or publishing diagnostics. Packaging and broader UI work are future work; this import keeps the current app behavior with portable setup and safer first-run defaults.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before adding fixtures or publishing diagnostics.
 
 ## License and affiliation
 
-A project license has not been selected yet. Public repository visibility alone does not grant an open-source license. Python and 7-Zip remain under their own licenses and are installed separately; no third-party runtime or game files are redistributed here.
+A project license has not been selected yet. Public repository visibility alone does not grant an open-source license. Python, Tcl/Tk, PyInstaller, and 7-Zip remain under their own licenses. No runtime binaries or game files are stored in this repository. Review the applicable runtime licenses before redistributing a build.
 
 This is an independent utility, not affiliated with or endorsed by Microsoft, Xbox, or game publishers.

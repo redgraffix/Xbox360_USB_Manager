@@ -10,7 +10,7 @@ from unittest.mock import patch
 import content
 import core
 from engine import Engine
-from runtime import find_7zip
+from runtime import find_7zip, default_base
 from test_converter import TestDrive, make_iso
 
 
@@ -41,6 +41,30 @@ class SecurityTests(unittest.TestCase):
         self.assertIsNone(engine.settings['drive'])
         with self.assertRaises(core.DriveMissing):
             engine.drive.locate()
+
+    def test_portable_app_uses_user_profile_not_executable_parent(self):
+        import sys
+        with patch('runtime.Path.home', return_value=self.root / 'profile'), \
+             patch.object(sys, 'frozen', True, create=True), \
+             patch.object(sys, 'executable', str(self.root / 'portable' / 'Converter.exe')):
+            self.assertEqual(default_base(), self.root / 'profile' / 'XBOX360-Convert')
+
+    def test_missing_archive_helper_shows_error_before_creating_profile(self):
+        import app
+        with patch.object(app.sys, 'argv', ['app.py']), \
+             patch('app.find_7zip', side_effect=FileNotFoundError('Install 7-Zip')), \
+             patch('app.ctypes.windll.user32.MessageBoxW') as dialog, \
+             patch('app.Engine') as engine:
+            self.assertEqual(app.main(), 1)
+        dialog.assert_called_once()
+        engine.assert_not_called()
+
+    def test_keep_originals_dismisses_pending_cleanup_persistently(self):
+        engine = self.engine()
+        job = dict(id='a'*32, state='Complete', source=str(engine.base / 'example.iso'), cleanup_pending=True)
+        engine.jobs.append(job)
+        engine.keep_originals([job['id']])
+        self.assertFalse(self.engine().jobs[0]['cleanup_pending'])
 
     def test_first_run_import_does_not_delete_original(self):
         import time, uuid

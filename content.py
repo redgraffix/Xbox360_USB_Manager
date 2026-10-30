@@ -52,9 +52,9 @@ def input_signature(path):
     path=Path(path)
     if path.is_file():return signature(path)
     rows=[]; total=0
-    for rel,n in actual_files(path).items():
-        p=safe_path(path/Path(rel),path); s=p.stat();total+=n
-        rows.append((rel,n,s.st_mtime_ns))
+    for p,s in walk_files(path):
+        rel=p.relative_to(path).as_posix().lower();total+=s.st_size
+        rows.append((rel,s.st_size,s.st_mtime_ns))
     return [total,hashlib.sha256(json.dumps(sorted(rows)).encode()).hexdigest(),'folder']
 
 def clean_title(name):
@@ -127,19 +127,26 @@ def unpack_all(tool,archive,folder,records,callback,checkpoint):
     if actual_files(folder)!=expected:raise ValueError('Extracted archive inventory differs from its listing')
     return folder
 
-def inspect_tree(folder,label=None):
+def game_unit(folder,display,files):
+    metadata=xex_info(folder/'default.xex')
+    relative=game_relative(display+'.iso')
+    if re.search(r'add.on|install(?:ation)? disc',display,re.I):relative=Path(clean_title(display.split(' (',1)[0]))/'Install disc'
+    if metadata.get('discs',0)>1 and len(relative.parts)==1:relative=relative/('Disc '+str(metadata['disc']))
+    return dict(name=display,kind='Install disc' if relative.name=='Install disc' else 'Extracted game',metadata=metadata,files=files,destination=Path('Games')/relative,package=None)
+
+
+def inspect_tree(folder,label=None,checkpoint=lambda:None):
     """Return independent game/content units, ISO inputs, and unhandled files."""
-    folder=Path(folder);all_files=[safe_path(p,folder) for p in folder.rglob('*') if p.is_file()]
-    # Validate empty directories and reparse points as well.
-    actual_files(folder)
+    folder=Path(folder);inventory=dict(walk_files(folder,checkpoint));all_files=list(inventory)
     consumed=set();units=[]
     roots=sorted({p.parent for p in all_files if p.name.lower()=='default.xex'},key=lambda p:len(p.parts))
     for p in all_files:
+        checkpoint()
         # A runnable game's files belong to that game, including embedded system
         # updates, installer packages and STFS assets. Only standalone packages
         # outside game folders are routed into the console Content hierarchy.
         if p in consumed or p.suffix.lower()=='.iso' or any(p.is_relative_to(game) for game in roots):continue
-        if p.stat().st_size<0x3AD:continue
+        if inventory[p].st_size<0x3AD:continue
         with p.open('rb') as f:magic=f.read(4)
         if magic not in (b'LIVE',b'PIRS',b'CON '):continue
         info=package_info(p)
@@ -160,14 +167,9 @@ def inspect_tree(folder,label=None):
         if game/'default.xex' in consumed:continue
         files=[(p,p.relative_to(game)) for p in all_files if p.is_relative_to(game) and p not in consumed]
         if not files:continue
-        metadata=xex_info(game/'default.xex')
         display=label if game==folder and label else game.name
-        relative=game_relative(display+'.iso')
-        # Installer/add-on discs must not collide with a base game of the same name.
-        if re.search(r'add.on|install(?:ation)? disc',display,re.I):relative=Path(clean_title(display.split(' (',1)[0]))/'Install disc'
-        if metadata.get('discs',0)>1 and len(relative.parts)==1:relative=relative/('Disc '+str(metadata['disc']))
         consumed.update(p for p,_ in files)
-        units.append(dict(name=display,kind='Install disc' if relative.name=='Install disc' else 'Extracted game',metadata=metadata,files=files,destination=Path('Games')/relative,package=None))
+        units.append(game_unit(game,display,files))
     isos=[p for p in all_files if p.suffix.lower()=='.iso' and p not in consumed]
     consumed.update(isos)
     unknown=[str(p.relative_to(folder)) for p in all_files if p not in consumed and p.suffix.lower() not in AUX]
@@ -176,8 +178,9 @@ def inspect_tree(folder,label=None):
 def verify_files(files,dest,callback,checkpoint,copy_files=False):
     total=sum(p.stat().st_size for p,_ in files);done=0;hashes={}
     if copy_files:
+        writer=StageWriter(dest)
         for p,rel in files:
-            checkpoint();target=safe_path(dest/rel,dest)
+            checkpoint();target=writer.target(rel)
             if p.stat().st_size>0xFFFFFFFF:raise ValueError('A file exceeds the FAT32 4 GB limit: '+p.name)
             target.parent.mkdir(parents=True,exist_ok=True)
             with locked_reader(p) as source,target.open('xb') as out:

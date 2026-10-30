@@ -28,13 +28,72 @@ def safe_path(path, root):
     return path
 
 
-def safe_remove_tree(path, root):
+def checked_entries(parent):
+    """Use directory enumeration metadata (cached on Windows), rejecting links."""
+    with os.scandir(parent) as entries:
+        for entry in entries:
+            s = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(s.st_mode) or getattr(s, 'st_file_attributes', 0) & 0x400:
+                raise ValueError('Linked folders are not supported: ' + entry.path)
+            yield Path(entry.path), s
+
+
+def walk_files(root, checkpoint=lambda: None):
+    """Validate directories once, rather than resolving every file and ancestor."""
+    root = safe_path(root, root); pending = [root]
+    while pending:
+        checkpoint(); parent = pending.pop(); safe_path(parent, root)
+        for path, s in checked_entries(parent):
+            checkpoint()
+            if stat.S_ISDIR(s.st_mode): pending.append(path)
+            elif stat.S_ISREG(s.st_mode): yield path, s
+            else: raise ValueError('Unsupported file type: ' + str(path))
+
+
+def game_executables(root, checkpoint=lambda: None):
+    """Find game roots without descending into each game's thousands of assets."""
+    root = safe_path(root, root); pending = [root]
+    while pending:
+        checkpoint(); parent = pending.pop(); safe_path(parent, root)
+        children = list(checked_entries(parent))
+        exe = next((p for p, s in children if p.name.lower() == 'default.xex' and stat.S_ISREG(s.st_mode)), None)
+        if exe is not None: yield exe
+        else: pending.extend(p for p, s in children if stat.S_ISDIR(s.st_mode))
+
+
+class StageWriter:
+    """Exclusive writes into an owned stage; validate/create each parent once."""
+    def __init__(self, root):
+        self.root = safe_path(root, root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.parents = {self.root}
+
+    def target(self, relative):
+        relative = Path(relative)
+        if relative.is_absolute() or not relative.parts: raise ValueError('Invalid stage path')
+        for part in relative.parts: valid_name(part)
+        target = self.root / relative
+        parent = target.parent
+        if parent not in self.parents:
+            safe_path(parent, self.root); parent.mkdir(parents=True, exist_ok=True)
+            self.parents.add(parent)
+        # Callers use 'xb', so existing files or links are never overwritten.
+        return target
+
+
+def safe_remove_tree(path, root, checkpoint=lambda: None):
     path = safe_path(path, root)
     if path == Path(root).absolute(): raise ValueError('Cannot remove the work root')
     if not path.exists(): return
-    for parent, dirs, files in os.walk(path, followlinks=False):
-        for name in dirs + files: safe_path(Path(parent)/name, root)
-    shutil.rmtree(path)
+    def remove(parent):
+        checkpoint(); safe_path(parent, root)
+        for child, s in checked_entries(parent):
+            checkpoint()
+            if stat.S_ISDIR(s.st_mode): remove(child)
+            elif stat.S_ISREG(s.st_mode): child.unlink()
+            else: raise ValueError('Unsupported file type: ' + str(child))
+        parent.rmdir()
+    remove(path)
 
 
 def signature(path):
@@ -150,14 +209,14 @@ def manifest(image):
     return sorted(entries, key=lambda item: item[0].as_posix().lower())
 
 
-def actual_files(dest):
-    safe_path(dest, dest)
+def actual_files(dest, checkpoint=lambda: None, callback=None):
+    dest = Path(dest)
     found = {}
-    for parent, dirs, files in os.walk(dest, followlinks=False):
-        for name in dirs + files: safe_path(Path(parent)/name, dest)
-        for name in files:
-            p = Path(parent)/name
-            found[p.relative_to(dest).as_posix().lower()] = p.stat().st_size
+    for p, s in walk_files(dest, checkpoint):
+        key = p.relative_to(dest).as_posix().lower()
+        if key in found: raise ValueError('Duplicate file path: ' + str(p))
+        found[key] = s.st_size
+        if callback: callback(len(found))
     return found
 
 
@@ -174,8 +233,8 @@ def iso_identity(image, entries):
     image.seek(offset); return identity(entries,image.read(n))
 
 
-def folder_identity(folder):
-    layout = actual_files(folder)
+def folder_identity(folder, checkpoint=lambda: None):
+    layout = actual_files(folder, checkpoint)
     executable = next((p for p in folder.iterdir() if p.name.lower() == 'default.xex'), None)
     if executable is None or executable.stat().st_size>128*1024*1024: return None
     return identity([(Path(p),0,n) for p,n in layout.items()],executable.read_bytes())
@@ -183,12 +242,19 @@ def folder_identity(folder):
 
 def extract_and_verify(image, entries, stage, callback, checkpoint):
     total = sum(n for _,_,n in entries)
-    if stage.exists(): raise ValueError('Staging folder already exists')
+    if stage.exists():
+        # Interrupted conversions are reusable only after comparison to the ISO.
+        callback('Checking', 0, len(entries), 'Checking interrupted conversion')
+        expected = {p.as_posix().lower(): n for p, _, n in entries}
+        if actual_files(stage, checkpoint) == expected:
+            return verify(image, entries, stage, callback, checkpoint)
+        safe_remove_tree(stage, stage.parent, checkpoint)
     stage.mkdir(parents=True)
+    writer = StageWriter(stage)
     done = 0
     for index,(rel,offset,size) in enumerate(entries,1):
         checkpoint()
-        target = safe_path(stage/rel,stage); target.parent.mkdir(parents=True,exist_ok=True)
+        target = writer.target(rel)
         image.seek(offset)
         with target.open('xb') as output:
             remaining = size
@@ -198,25 +264,39 @@ def extract_and_verify(image, entries, stage, callback, checkpoint):
                 output.write(data); remaining -= count; done += count
                 callback('Converting',done,total,f'{index:,} / {len(entries):,} files · {rel.name}')
             output.flush(); os.fsync(output.fileno())
-    verify(image,entries,stage,callback,checkpoint)
-    return total
+    return verify(image,entries,stage,callback,checkpoint)
 
 
 def verify(image,entries,dest,callback,checkpoint):
     expected = {p.as_posix().lower():n for p,_,n in entries}
-    if actual_files(dest) != expected: raise ValueError('Verification failed: file inventory or sizes differ')
-    total = sum(expected.values()); done = 0
+    def inventory():
+        callback('Checking', 0, len(entries), 'Checking USB file list')
+        found = {}
+        for p, s in walk_files(dest, checkpoint):
+            key = p.relative_to(dest).as_posix().lower()
+            if key in found: raise ValueError('Duplicate file path: ' + str(p))
+            found[key] = (s.st_size, s.st_mtime_ns)
+            callback('Checking', len(found), len(entries), f'Checking USB file list: {len(found):,} / {len(entries):,} files')
+        return found
+    before = inventory()
+    if {p: s[0] for p, s in before.items()} != expected: raise ValueError('Verification failed: file inventory or sizes differ')
+    total = sum(expected.values()); done = 0; hashes = {}
     for index,(rel,offset,size) in enumerate(entries,1):
         checkpoint(); image.seek(offset)
-        with (dest/rel).open('rb') as actual:
+        sha = hashlib.sha256()
+        with locked_reader(dest/rel) as actual:
             remaining = size
             while remaining:
                 checkpoint(); count = min(CHUNK,remaining)
                 a,b = image.read(count),actual.read(count)
                 if len(a)!=count or a!=b: raise ValueError('Verification failed: data mismatch in '+str(rel))
+                sha.update(b)
                 remaining-=count; done+=count
                 callback('Verifying',done,total,f'{index:,} / {len(entries):,} files · {rel.name}')
-    if actual_files(dest) != expected: raise ValueError('Game files changed during verification')
+            if actual.read(1): raise ValueError('Verification failed: file size changed in '+str(rel))
+        hashes[rel.as_posix()] = {'size': size, 'sha256': sha.hexdigest(), 'mtime_ns': before[rel.as_posix().lower()][1]}
+    if inventory() != before: raise ValueError('Game files changed during verification')
+    return hashes
 
 
 def archive_members(tool, archive):

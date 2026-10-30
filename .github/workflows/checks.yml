@@ -21,4 +21,13 @@ jobs:
       - name: Check archive helper
         run: python -c "from runtime import find_7zip; print(find_7zip())"
       - name: Test with synthetic local fixtures
-        run: python -m unittest -v test_converter test_imports test_security
+        run: python -m unittest -v test_converter test_imports test_security test_performance
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Build Windows executable
+        run: python scripts/build_windows.py
+      - name: Smoke test executable imports
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath '.\dist\Xbox360 Converter\Xbox360 Converter.exe' -ArgumentList '--help' -WindowStyle Hidden -Wait -PassThru
+          if ($app.ExitCode -ne 0) { throw "Executable smoke test failed: $($app.ExitCode)" }

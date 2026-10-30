@@ -1,6 +1,8 @@
 # Local application data: never publish input files, history or drive identities.
 _state/
 _work/
+_downloads/
+downloads.json
 _app/
 _internal/
 Xbox360-Conversion-Staging/

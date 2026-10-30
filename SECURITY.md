@@ -2,9 +2,9 @@
 
 ## Scope
 
-This is a local Windows file-management utility. It does not expose a server, accept remote commands, store account credentials, download games, or send telemetry. Run it as a normal user with trusted local settings and an updated Python/7-Zip installation.
+This is a local Windows file-management utility. It makes no network requests, exposes no server, accepts no remote commands, stores no account credentials, and sends no telemetry. Run it as a normal user with trusted local settings and an updated Python/7-Zip installation.
 
-The public source is the supported development baseline. Older privately built executables may differ from this source; no signed release or packaged installer is provided yet.
+The public source is the supported development baseline. The optional build script creates an unsigned Windows executable from that source. Older privately built executables may differ; rebuild to pick up source changes. No signed release or packaged installer is provided yet.
 
 ## Protections and limits
 

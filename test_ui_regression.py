@@ -21,6 +21,7 @@ def main():
         base=Path(tmp).resolve();drive=TestDrive(base/'usb');e=Engine(base/'input',find_7zip(),drive,settle_seconds=0)
         iso=e.base/'Start button test.iso';make_iso(iso);e.delete_sources=False
         root=tk.Tk();app=App(root,e);release=threading.Event();entered=threading.Event()
+        results['local_manager_tabs_only']=[app.tabs.tab(t,'text') for t in app.tabs.tabs()]==['Queue','Games','History']
         def slow_scan(*args):
             entered.set();release.wait(10)
             return []
