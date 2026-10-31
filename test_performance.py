@@ -13,20 +13,22 @@ from test_converter import ConverterTests, make_iso
 
 class PerformanceTests(ConverterTests):
     # Reuse setup/helpers without collecting the inherited conversion suite twice.
-    def test_iso_publishes_verified_stage_without_second_copy(self):
+    def test_iso_prepares_locally_then_publishes_verified_files(self):
         source = self.base / 'Single write.iso'
         expected = make_iso(source)
         job = self.job(source)
         with patch('engine.verify_files', side_effect=AssertionError('redundant USB copy')):
             self.eng.process(job)
         self.assertEqual(job['state'], 'Complete')
+        self.assertEqual([p.name for p in self.drive.root.iterdir()], ['Games'])
+        self.assertFalse(list(self.eng.work.iterdir()))
         records = json.loads(Path(job['verification_manifest']).read_text())
         for name, data in expected.items():
-            self.assertEqual(records[0]['files'][name]['sha256'], hashlib.sha256(data).hexdigest())
+            self.assertEqual(records['files']['Games/Single write/'+name]['sha256'], hashlib.sha256(data).hexdigest())
             self.assertEqual((self.drive.root / 'Games' / 'Single write' / name).read_bytes(), data)
 
     def stage(self, job):
-        return self.drive.root / 'Xbox360-Conversion-Staging' / 'Converter' / job['id'] / 'converted' / '0'
+        return self.eng.work / job['id'] / 'converted' / '0'
 
     def test_completed_interrupted_stage_is_reverified_without_rewriting(self):
         source = self.base / 'Resume.iso'; make_iso(source); job = self.job(source)
@@ -76,7 +78,7 @@ class PerformanceTests(ConverterTests):
         source = self.base / 'Stop scan.iso'; make_iso(source); job = self.job(source)
         update = self.eng.update
         def stop(job, **values):
-            if values.get('detail') == 'Checking USB file list': self.eng.cancel.set()
+            if values.get('state') == 'Copying': self.eng.cancel.set()
             return update(job, **values)
         with patch.object(self.eng, 'update', side_effect=stop):
             with self.assertRaises(core.Cancelled): self.eng.process(job)
@@ -90,16 +92,6 @@ class PerformanceTests(ConverterTests):
         source = self.base / 'New game.iso'; make_iso(source)
         with patch('engine.folder_identity', side_effect=AssertionError('scanned unrelated game')):
             self.eng.process(self.job(source))
-
-    def test_changed_verified_stage_is_not_published(self):
-        source = self.base / 'Changed.iso'; make_iso(source); job = self.job(source)
-        def change(*args):
-            (self.stage(job) / 'default.xex').write_bytes(b'changed')
-        with patch.object(self.eng, '_metadata_match', side_effect=change):
-            with self.assertRaisesRegex(ValueError, 'stage changed'):
-                self.eng.process(job)
-        self.assertTrue(source.exists())
-        self.assertFalse((self.drive.root / 'Games' / 'Changed').exists())
 
     def test_inventory_rejects_links_and_keeps_external_files(self):
         folder = self.root / 'links'; folder.mkdir()
@@ -128,12 +120,12 @@ class PerformanceTests(ConverterTests):
 
     def test_mutation_after_byte_verification_cannot_become_new_baseline(self):
         source = self.base / 'Late change.iso'; make_iso(source); job = self.job(source)
-        real = engine.game_unit
+        real = __import__('preparation').game_unit
         def mutate(folder, label, files):
             (folder / 'default.xex').write_bytes(b'changed after verification')
             return real(folder, label, files)
-        with patch('engine.game_unit', side_effect=mutate):
-            with self.assertRaisesRegex(ValueError, 'stage changed'):
+        with patch('preparation.game_unit', side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, 'verification'):
                 self.eng.process(job)
         self.assertTrue(source.exists())
 

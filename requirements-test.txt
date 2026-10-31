@@ -1,0 +1,2 @@
+-r requirements.txt
+pyftpdlib==2.2.0

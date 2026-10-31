@@ -82,7 +82,7 @@ class ConverterTests(unittest.TestCase):
     def test_duplicate_content_with_different_filename(self):
         first=self.base/'Original.iso'; make_iso(first); self.eng.process(self.job(first))
         second=self.base/'Different Name.iso'; make_iso(second)
-        with self.assertRaisesRegex(core.Duplicate,'content'): self.eng.process(self.job(second))
+        with self.assertRaisesRegex(core.Duplicate,'Identical'): self.eng.process(self.job(second))
         self.assertTrue(second.exists()); self.assertFalse((self.drive.root/'Games'/'Different Name').exists())
     def test_duplicate_queued_archive_and_iso(self):
         make_iso(self.base/'Same Game (USA).iso'); (self.base/'Same Game (1).7z').write_bytes(b'test')
@@ -142,12 +142,12 @@ class ConverterTests(unittest.TestCase):
         make_iso(a); make_iso(b,{'default.xex':b'XEX2-disc2','second.bin':b'content'})
         archive=self.base/'Game.zip'
         with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z: z.write(a,a.name); z.write(b,b.name)
-        job=self.job(archive); real=engine.extract_and_verify; count=[0]
+        job=self.job(archive); real=__import__('preparation').extract_and_verify; count=[0]
         def fail_second(*args):
             count[0]+=1
             if count[0]==2: raise ValueError('simulated failure')
             return real(*args)
-        with patch('engine.extract_and_verify',side_effect=fail_second):
+        with patch('preparation.extract_and_verify',side_effect=fail_second):
             with self.assertRaises(ValueError): self.eng.process(job)
         # All disc images prepare successfully before any game is published.
         self.assertTrue(archive.exists()); self.assertFalse((self.drive.root/'Games'/'Game'/'Disc 1'/'default.xex').exists())

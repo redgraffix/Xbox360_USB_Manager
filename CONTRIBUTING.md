@@ -1,6 +1,6 @@
 # Contributing
 
-Keep the workflow simple: choose folders and a USB, queue files, verify the transfer, and report what happened. Preserve conservative deletion and duplicate checks when changing the interface.
+Keep the workflow simple: choose input/work folders and an output destination, queue files, verify the transfer, and report what happened. Preserve conservative deletion and duplicate checks when changing the interface.
 
 Run the non-GUI tests listed in the README for conversion changes. Run the UI regression scripts for interface/worker changes. Use temporary directories and synthetic fixtures; tests must never discover and operate on a real user's game drive.
 

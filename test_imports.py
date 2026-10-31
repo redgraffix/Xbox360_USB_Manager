@@ -67,8 +67,8 @@ class ImportTests(ConverterTests):
         self.eng.settings['clean_temp']=False
         iso=self.root/'Temp.iso';make_iso(iso);archive=self.base/'Temp.zip'
         with zipfile.ZipFile(archive,'w') as z:z.write(iso,'Temp.iso')
-        self.eng.process(self.job(archive));self.assertTrue(list(self.eng.work.iterdir()))
-        self.eng.drive_root=self.drive.root;self.assertGreater(self.eng.clean_leftovers(),0)
+        self.eng.process(self.job(archive));self.assertFalse(list(self.eng.work.iterdir()))
+        self.eng.drive_root=self.drive.root;self.assertEqual(self.eng.clean_leftovers(),0)
         self.assertFalse(list(self.eng.work.iterdir()));self.assertTrue((self.drive.root/'Games'/'Temp').exists())
     def test_batch_keep_overrides_delete_default(self):
         self.eng.batch_policy='keep';iso=self.base/'Keep batch.iso';make_iso(iso);self.eng.process(self.job(iso));self.assertTrue(iso.exists())
@@ -114,11 +114,11 @@ class ImportTests(ConverterTests):
         self.assertIn('enable title updates',j['setup_note'])
     def test_source_not_deleted_if_verification_record_cannot_save(self):
         iso=self.base/'Record failure.iso';make_iso(iso);j=self.job(iso)
-        real=engine.atomic_json
+        real=__import__('pipeline').atomic_json
         def fail_manifest(path,data,required=False):
             if Path(path).parent.name=='manifests':raise PermissionError('locked verification record')
             return real(path,data,required)
-        with patch('engine.atomic_json',side_effect=fail_manifest):
+        with patch('pipeline.atomic_json',side_effect=fail_manifest):
             with self.assertRaises(PermissionError):self.eng.process(j)
         self.assertTrue(iso.exists())
 

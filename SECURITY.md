@@ -2,7 +2,7 @@
 
 ## Scope
 
-This is a local Windows file-management utility. It makes no network requests, exposes no server, accepts no remote commands, stores no account credentials, and sends no telemetry. Run it as a normal user with trusted local settings and an updated Python/7-Zip installation.
+This is a Windows file-management utility with optional outbound FTP to a user-configured Xbox. It exposes no server and sends no telemetry. FTP passwords live in Windows Credential Manager, not in settings or logs. FTP itself is unencrypted: use a trusted local network, never internet exposure. Run as a normal user with trusted settings and current Python, Pillow and 7-Zip installations.
 
 The public source is the supported development baseline. The optional build script creates an unsigned Windows executable from that source. Older privately built executables may differ; rebuild to pick up source changes. No signed release or packaged installer is provided yet.
 
@@ -14,6 +14,9 @@ The public source is the supported development baseline. The optional build scri
 - Existing conflicting files are not intentionally overwritten. Removal/cleanup are limited to selected content or recognized work folders.
 - The archive helper is launched with an argument list, without a shell. Default lookup uses Program Files; an explicit executable path is trusted user configuration.
 - Game executables are treated as data, not launched by the converter.
+- Local preparation precedes transfer. Per-file partial writes are hash-verified before publication, with durable progress records and destination-bound retries.
+- Game-list caches are hints, never proof of a duplicate. Removal rechecks inventories and deletes only the selected, preflighted files.
+- Thumbnail decoding is bounded in bytes and dimensions. Remote metadata reads use separate, bounded FTP connections.
 
 These checks do not make the application a sandbox or malware scanner. Malformed content can still stress parsers, CPU, memory, and storage. 7-Zip is a security-sensitive external dependency: update it from its official source. Do not run with administrator privileges or deliberately point the app at hostile shared folders. Other processes changing folders concurrently, hardware faults, and power loss can defeat filesystem assumptions or interrupt a multi-file publication. Keep a recoverable copy until console testing succeeds.
 
@@ -27,7 +30,7 @@ Keep inputs, USB content, archives, logs, history, drive identifiers, private pa
 
 ## Reporting a vulnerability
 
-Use the repository's **Security → Advisories → Report a vulnerability** option if private reporting is enabled. If it is unavailable, open a public issue asking the maintainer to enable a private reporting channel, without including exploit details, credentials, logs, or personal information. Do not publish a sensitive report in a normal issue.
+Use the repository's **Security â†’ Advisories â†’ Report a vulnerability** option if private reporting is enabled. If it is unavailable, open a public issue asking the maintainer to enable a private reporting channel, without including exploit details, credentials, logs, or personal information. Do not publish a sensitive report in a normal issue.
 
 Provide the affected commit, Windows/Python/7-Zip versions, expected behavior, and a minimal synthetic reproduction. Do not include real game archives, private paths, volume identifiers, or original user logs.
 

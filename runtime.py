@@ -9,6 +9,10 @@ def default_base():
     return Path.home() / 'XBOX360-Convert'
 
 
+def default_work():
+    return Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) / 'Xbox360USBManager' / 'Work'
+
+
 def find_7zip(explicit=None):
     """An explicit path/environment override is a trusted local configuration."""
     override = explicit or os.environ.get('XBOX360_7ZIP')

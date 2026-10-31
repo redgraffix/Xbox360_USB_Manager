@@ -27,8 +27,8 @@ def main():
             return []
         try:
             e.scan();e.scan();pump(root,lambda:app.last_snapshot and app.last_snapshot['drive'])
-            with patch('app.scan_library',slow_scan):
-                app.tabs.select(app.games_tab);assert pump(root,entered.is_set)
+            with patch('library_cache.scan',slow_scan):
+                app.tabs.select(app.games_tab);app.refresh_library();assert pump(root,entered.is_set)
                 app.tabs.select(app.queue_tab);pump(root,seconds=.5)
                 results['scan_does_not_block_start']=str(app.start['state'])=='normal' and not app.busy and not e.maintenance
                 assert results['scan_does_not_block_start']
@@ -53,7 +53,7 @@ def main():
             assert pump(root,lambda:not app.busy)
             pump(root,seconds=.4)
             results['callback_error_does_not_stop_ui_updates']=app.root.winfo_exists() and str(app.start['state'])=='normal'
-            with patch('app.scan_library',side_effect=OSError('USB fixture disconnected')):
+            with patch('library_cache.scan',side_effect=OSError('USB fixture disconnected')):
                 app.refresh_library();assert pump(root,lambda:not app.library_loading)
                 results['scan_error_leaves_start_enabled']=str(app.start['state'])=='normal' and not e.maintenance
             def within(widget,window):

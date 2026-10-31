@@ -10,7 +10,9 @@ AUX={'.txt','.nfo','.jpg','.jpeg','.png','.sfv','.md','.url'}
 def atomic_json(path,data,required=False):
     path=Path(path); temp=path.with_name(path.name+'.pending')
     try:
-        temp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+        with temp.open('w',encoding='utf-8') as stream:
+            json.dump(data,stream,ensure_ascii=False,indent=2)
+            stream.flush();os.fsync(stream.fileno())
         for attempt in range(5):
             try: os.replace(temp,path); return True
             except OSError:
@@ -80,6 +82,9 @@ def xex_info(path):
 
 def package_info(path):
     with Path(path).open('rb') as f:h=f.read(0x1711)
+    return package_header(h)
+
+def package_header(h):
     if len(h)<0x3AD or h[:4] not in (b'LIVE',b'PIRS',b'CON '):return None
     get=lambda offset:struct.unpack_from('>I',h,offset)[0]
     kind=get(0x344)
