@@ -23,12 +23,15 @@ def main():
         root=tk.Tk();app=App(root,e);release=threading.Event();entered=threading.Event()
         results['local_manager_tabs_only']=[app.tabs.tab(t,'text') for t in app.tabs.tabs()]==['Queue','Games','History']
         def slow_scan(*args):
+            args[3]([dict(id='preview',name='Visible before scan finishes',title_id='',size=None,formats='Game',discs=1,location='Local folder',components=[],thumbnail=None)])
             entered.set();release.wait(10)
             return []
         try:
             e.scan();e.scan();pump(root,lambda:app.last_snapshot and app.last_snapshot['drive'])
             with patch('library_cache.scan',slow_scan):
                 app.tabs.select(app.games_tab);app.refresh_library();assert pump(root,entered.is_set)
+                assert pump(root,lambda:app.games_tree.exists('preview'))
+                results['game_rows_appear_before_refresh_finishes']=app.library_loading
                 app.tabs.select(app.queue_tab);pump(root,seconds=.5)
                 results['scan_does_not_block_start']=str(app.start['state'])=='normal' and not app.busy and not e.maintenance
                 assert results['scan_does_not_block_start']

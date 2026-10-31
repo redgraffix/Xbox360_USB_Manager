@@ -11,11 +11,14 @@ def matches(actual, expected):
 
 def locate_duplicates(session,units,games,cached,checkpoint):
     """A cache suggests candidates; only a complete byte match proves a duplicate."""
-    candidates=[c for g in cached for c in g['components'] if c['kind']=='Extracted game']
+    candidates=[c for g in cached for c in g['components'] if c['kind'] in {'Extracted game','Game folder'}]
     for unit in units:
         if unit['kind']!='Extracted game':continue
         for candidate in candidates:
-            if candidate['size']!=sum(h['size'] for h in unit['hashes'].values()):continue
+            if candidate.get('size') is None:
+                fields=('title_id','media_id','version','disc');info=unit['metadata']
+                if not info.get('media_id') or info['media_id']=='00000000' or not all(k in info and candidate['metadata'].get(k)==info[k] for k in fields):continue
+            elif candidate['size']!=sum(h['size'] for h in unit['hashes'].values()):continue
             for root in candidate['paths']:
                 if not root.startswith(relative(games)+'/'):continue
                 checkpoint();st=session.stat(root)

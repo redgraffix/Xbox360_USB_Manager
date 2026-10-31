@@ -144,7 +144,7 @@ class App:
         data=library_cache.load(self.engine);self.library=data['items'];self.library_loaded=True
         self.cache_revision=self.engine.cache_revision;self.render_library()
         stamp=date(data.get('refreshed')) if data.get('refreshed') else 'not yet scanned'
-        self.game_detail.set(f"{len(self.library)} cached games · Last refreshed: {stamp}. Refresh to check the destination.")
+        self.game_detail.set(f"{len(self.library)} cached games · Last refreshed: {stamp}. Refresh lists folders; sizes and artwork use cached details.")
     def background(self,fn,done=None,message='Working…'):
         if self.busy:
             messagebox.showinfo('Please wait','Another file operation is still running.',parent=self.root);return
@@ -168,9 +168,10 @@ class App:
         self.refresh_button.configure(state='disabled');self.cancel_scan_button.configure(state='normal')
         expected=identity(self.engine.settings['destination'])
         def progress(message):self.library_progress=message
+        def preview(items):self.library_events.put((items,'preview',cancel))
         def run():
             try:
-                result=library_cache.scan(self.engine,cancel,progress)
+                result=library_cache.scan(self.engine,cancel,progress,preview)
                 if identity(self.engine.settings['destination'])!=expected:raise Cancelled()
                 self.library_events.put((result,None,cancel))
             except Exception as e:self.library_events.put((None,e,cancel))
@@ -179,11 +180,14 @@ class App:
         while not self.library_events.empty():
             items,error,cancel=self.library_events.get()
             if cancel is not self.library_cancel:continue
+            if error=='preview':
+                if not cancel.is_set():self.library=items;self.library_loaded=True;self.render_library()
+                continue
             self.library_loading=False;self.refresh_button.configure(state='normal');self.cancel_scan_button.configure(state='disabled')
             if cancel.is_set() or isinstance(error,Cancelled):self.game_detail.set('Scan stopped. Click Refresh list to try again.')
             elif error:self.game_detail.set('Could not refresh; cached list kept. '+str(error));self.engine.log('Game list: '+str(error))
             else:
-                self.library=items;self.library_loaded=True;self.render_library();self.game_detail.set(f'{len(items)} games · {location_label(self.engine.settings["destination"])} · Refreshed just now')
+                self.library=items;self.library_loaded=True;self.render_library();self.game_detail.set(f'{len(items)} games · {location_label(self.engine.settings["destination"])} · Quick refresh complete. Sizes and artwork use cached details; — means unknown.')
         if self.library_loading:self.game_detail.set(self.library_progress)
     def game_image(self,g):
         name=g.get('thumbnail') or 'placeholder'
@@ -241,16 +245,19 @@ class App:
         listing=tk.Listbox(box,selectmode='extended',exportselection=False,bg=PANEL,fg=FG,font=('Segoe UI',10),height=9);listing.pack(fill='both',expand=True)
         for i,c in enumerate(g['components']):
             listing.insert('end',c['kind']+' · '+c['name']+' · '+size(c['size']))
-            if c['kind'] in {'Extracted game','Games on Demand','Arcade game','Install disc'}:listing.selection_set(i)
+            if c['kind'] in {'Extracted game','Game folder','Games on Demand','Arcade game','Install disc'}:listing.selection_set(i)
         ttk.Label(box,text='DLC and updates require their own selection. Removal is permanent.',wraplength=590,style='Muted.TLabel').pack(anchor='w',pady=10)
         def remove():
             chosen=[g['components'][i] for i in listing.curselection()]
             if not chosen:return
-            paths='\n'.join(p for c in chosen for p in c['paths'])
-            if not messagebox.askyesno('Remove selected content?',f"Permanently remove {size(sum(c['size'] for c in chosen))} from USB?\n\n{paths}",parent=win):return
             win.destroy()
             def done(_):self.library_loaded=False;self.game_detail.set('Selected content removed. Refresh the list.');self.last_history=None
-            self.background(lambda:library_cache.remove(self.engine,chosen),done,'Removing selected content…')
+            def confirm(checked):
+                paths='\n'.join(p for c in checked for p in c['paths'])
+                count=sum(len(c['files']) for c in checked)
+                if messagebox.askyesno('Remove selected content?',f"Permanently remove {count} files ({size(sum(c['size'] for c in checked))}) from the selected destination?\n\n{paths}",parent=self.root):
+                    self.background(lambda:library_cache.remove(self.engine,checked),done,'Removing selected content…')
+            self.background(lambda:library_cache.prepare_removal(self.engine,chosen),confirm,'Checking selected content before removal…')
         ttk.Button(box,text='Remove selected…',command=remove).pack(anchor='e')
     def history_details(self):
         ids=self.history.selection()

@@ -119,7 +119,7 @@ class FileSession:
 
 class FTPSession:
     def __init__(self, config, secret):
-        self.config=normalize(config);self.secret=secret;self.ftp=self.connect();self.created=set()
+        self.config=normalize(config);self.secret=secret;self.ftp=self.connect();self.created=set();self.mlsd_supported=True
         try:self.ftp.cwd(self.config['root'])
         except Exception:self.ftp.close();raise
     def connect(self):
@@ -134,6 +134,7 @@ class FTPSession:
     def list(self, rel=''):
         path=self.path(rel)
         try:
+            if not self.mlsd_supported:raise ftplib.error_perm('502 MLSD unavailable')
             rows=list(self.ftp.mlsd(path, facts=['type','size','modify']))
             result=[]
             for name,info in rows:
@@ -144,6 +145,7 @@ class FTPSession:
             return result
         except ftplib.error_perm as e:
             if not str(e).startswith(('500','501','502','504')):raise
+            self.mlsd_supported=False
         # Aurora commonly implements LIST rather than MLSD.
         lines=[];old=self.ftp.pwd()
         try:

@@ -11,7 +11,7 @@ from PIL import Image
 from core import Duplicate
 from engine import Engine
 from destinations import FileSession, FTPSession, connect, identity, location_label, normalize, relative, DestinationConflict
-from library_cache import load, scan, remove, thumbnail, package_art
+from library_cache import load, scan, remove, thumbnail, package_art, prepare_removal, cache_file
 from test_converter import ConverterTests, make_iso, TOOL
 from test_imports import package
 
@@ -36,6 +36,63 @@ def ftp_server(root):
 
 
 class DestinationTests(ConverterTests):
+    def test_quick_scan_lists_only_game_roots_without_reading_assets(self):
+        game=self.drive.root/'Games'/'Quick game';assets=game/'assets'/'levels';assets.mkdir(parents=True)
+        (game/'default.xex').write_bytes(b'XEX2-fixture');(assets/'large.bin').write_bytes(b'fixture')
+        calls=[];real=FileSession.list
+        def listing(session,rel=''):calls.append(rel);return real(session,rel)
+        with patch.object(FileSession,'list',listing),patch.object(FileSession,'prefix',side_effect=AssertionError('Read a game file')),patch('library_cache.walk',side_effect=AssertionError('Deep inventory')):
+            rows=scan(self.eng,threading.Event())
+        self.assertEqual(calls,['','Games']);self.assertEqual(rows[0]['name'],'Quick game')
+        self.assertIsNone(rows[0]['size']);self.assertFalse(rows[0]['components'][0]['inventory_complete'])
+
+    def test_quick_scan_preserves_known_sizes_and_metadata(self):
+        src=self.base/'Known.iso';make_iso(src);self.eng.process(self.job(src));before=load(self.eng)['items'][0]
+        with patch('library_cache.walk',side_effect=AssertionError('Deep inventory')),patch.object(FileSession,'prefix',side_effect=AssertionError('Read a game file')):
+            after=scan(self.eng,threading.Event())[0]
+        self.assertEqual(after['size'],before['size']);self.assertEqual(after['components'],before['components'])
+
+    def test_quick_content_scan_never_opens_packages_or_god_data(self):
+        folder=self.drive.root/'Content'/'0000000000000000'/'545408A7'
+        god=package(folder/'00007000'/'GAME',kind=0x7000,pieces=1,data_size=4)
+        (god.parent/'GAME.data').mkdir();(god.parent/'GAME.data'/'Data0000').write_bytes(b'game')
+        package(folder/'00000002'/'DLC')
+        calls=[];real=FileSession.list
+        def listing(session,rel=''):calls.append(rel);return real(session,rel)
+        with patch.object(FileSession,'list',listing),patch.object(FileSession,'prefix',side_effect=AssertionError('Package read')),patch('library_cache.walk',side_effect=AssertionError('Deep inventory')):
+            rows=scan(self.eng,threading.Event())
+        self.assertFalse(any('.data' in path for path in calls));self.assertEqual(len(rows),1)
+        self.assertIn('1 DLC',rows[0]['formats']);self.assertIsNone(rows[0]['size'])
+
+    def test_quick_scan_displays_games_before_scanning_content(self):
+        (self.drive.root/'Games'/'Visible immediately').mkdir(parents=True)
+        package(self.drive.root/'Content'/'0000000000000000'/'545408A7'/'00000002'/'DLC')
+        previews=[];real=FileSession.list
+        def listing(session,rel=''):
+            if rel.startswith('Content'):self.assertTrue(previews)
+            return real(session,rel)
+        with patch.object(FileSession,'list',listing):scan(self.eng,threading.Event(),on_items=lambda items:previews.append(items))
+        self.assertEqual(previews[0][0]['name'],'Visible immediately')
+
+    def test_summary_requires_selected_inspection_before_deletion(self):
+        game=self.drive.root/'Games'/'Inspect first';game.mkdir(parents=True);(game/'default.xex').write_bytes(b'fixture')
+        rows=scan(self.eng,threading.Event());summary=rows[0]['components']
+        with self.assertRaisesRegex(ValueError,'Inspect'):remove(self.eng,summary)
+        checked=prepare_removal(self.eng,summary);self.assertEqual(checked[0]['size'],7)
+        (game/'added.txt').write_text('keep',encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'changed'):remove(self.eng,checked)
+        self.assertTrue((game/'default.xex').exists());self.assertTrue((game/'added.txt').exists())
+
+    def test_quick_scan_stop_after_preview_does_not_continue_into_content(self):
+        (self.drive.root/'Games'/'Stop fixture').mkdir(parents=True)
+        package(self.drive.root/'Content'/'0000000000000000'/'545408A7'/'00000002'/'DLC')
+        cancel=threading.Event();real=FileSession.list
+        def listing(session,rel=''):
+            self.assertFalse(rel.startswith('Content'));return real(session,rel)
+        from core import Cancelled
+        with patch.object(FileSession,'list',listing),self.assertRaises(Cancelled):
+            scan(self.eng,cancel,on_items=lambda _:cancel.set())
+
     def test_missing_local_output_does_not_break_startup_or_recreate_it(self):
         output=self.root/'offline-output';output.mkdir()
         self.eng.settings['destination']=dict(kind='folder',path=str(output));self.eng.options(delete=False);output.rmdir()

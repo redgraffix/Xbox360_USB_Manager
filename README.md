@@ -89,9 +89,11 @@ Keep another copy of anything you cannot replace. Disk failure, power loss and c
 
 Install/add-on discs may still require installation on the console. Title updates must match the game and be activated in Aurora; legacy `TU_` files need manual placement. Standalone system updates are left for review.
 
-Games lists are cached separately for each selected destination. Opening the tab reads the cache; **Refresh list** explicitly scans storage in the background. Imports update the cache. Cached data remains viewable while the destination is disconnected. Duplicate detection uses cached candidates as hints, then checks actual files; refresh after adding or renaming games outside the manager.
+Games lists are cached separately for each selected destination. Opening the tab reads the cache. **Refresh list** performs a quick background inventory: it lists the Games folder and recognized Content directories, without descending into game assets, reading package payloads, or hashing files. Game rows appear as soon as the top-level listing is available. Names and other details reuse local import history and the cache; unknown sizes show **—** instead of triggering a deep scan. Cached sizes and metadata can be stale.
 
-Thumbnails come from supported package headers or existing `folder.jpg`, `folder.png`, `cover.jpg`, `cover.png` or `icon.png` files. A neutral Xbox-style placeholder appears when artwork is unavailable. Nothing is scraped or downloaded. Metadata is best-effort: a folder name may be used when a readable title is unavailable. The list shows the selected destination, not an aggregated view of every device.
+Imports update the cache, which remains viewable while the destination is disconnected. Full byte checks happen during transfers and explicit verification. Removal first inspects only the selected content, then asks for confirmation with its current file count and size, and rechecks before deleting. Duplicate detection treats cached data as hints and checks actual destination bytes before declaring a duplicate.
+
+During imports, thumbnails are cached from supported package headers or existing `folder.jpg`, `folder.png`, `cover.jpg`, `cover.png` or `icon.png` files. Quick refresh reuses those thumbnails; a neutral Xbox-style placeholder appears when cached artwork is unavailable. Nothing is scraped or downloaded. Metadata is best-effort: a folder name may be used when a readable title is unavailable. The list shows the selected destination, not an aggregated view of every device.
 
 ## App data and privacy
 
