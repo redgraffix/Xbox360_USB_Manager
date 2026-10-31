@@ -18,13 +18,19 @@ def safe_path(path, root):
     path, root = Path(os.path.abspath(path)), Path(os.path.abspath(root))
     if path != root and not path.is_relative_to(root):
         raise ValueError('Path is outside the allowed folder: ' + str(path))
-    for p in (path, *path.parents):
-        try: s = p.lstat()
-        except FileNotFoundError: continue
-        if stat.S_ISLNK(s.st_mode) or getattr(s, 'st_file_attributes', 0) & 0x400:
-            raise ValueError('Linked folders are not supported: ' + str(p))
-    if path.resolve() != path:
-        raise ValueError('Unexpected resolved path: ' + str(path))
+    def reject_links(candidate):
+        for p in (candidate, *candidate.parents):
+            try: s = p.lstat()
+            except FileNotFoundError: continue
+            if stat.S_ISLNK(s.st_mode) or getattr(s, 'st_file_attributes', 0) & 0x400:
+                raise ValueError('Linked folders are not supported: ' + str(p))
+    reject_links(path)
+    resolved, resolved_root = path.resolve(), root.resolve()
+    # Windows package virtualization can redirect AppData without a reparse
+    # point. Compare both resolved paths rather than requiring literal equality.
+    if resolved != resolved_root and not resolved.is_relative_to(resolved_root):
+        raise ValueError('Resolved path is outside the allowed folder: ' + str(path))
+    if resolved != path:reject_links(resolved)
     return path
 
 

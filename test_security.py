@@ -42,6 +42,43 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaises(core.DriveMissing):
             engine.drive.locate()
 
+    def test_windows_redirected_work_folder_can_save_settings_and_import(self):
+        logical=self.root/'local-data'/'Work';physical=self.root/'package-cache'/'Work'
+        physical.mkdir(parents=True);logical.mkdir(parents=True)
+        original=Path.resolve
+        def redirected(path,*args,**kwargs):
+            if path==logical or path.is_relative_to(logical):return physical/path.relative_to(logical)
+            return original(path,*args,**kwargs)
+        drive=TestDrive(self.root/'usb');engine=self.engine(drive=drive)
+        source=engine.base/'Redirected.iso';files=make_iso(source)
+        with patch.object(Path,'resolve',redirected):
+            engine.configure(dict(temp=str(logical),destination=dict(kind='ftp',host='example.invalid',user='fixture',root='/Usb0')))
+            engine.scan();engine.scan();engine.enable();engine._work_once()
+        self.assertEqual(engine.jobs[0]['state'],'Complete')
+        self.assertTrue(source.exists())
+        self.assertEqual((drive.root/'Games'/'Redirected'/'default.xex').read_bytes(),files['default.xex'])
+
+    def test_resolved_child_must_stay_within_resolved_root(self):
+        root=self.root/'selected';root.mkdir();child=root/'file';outside=self.root/'outside'
+        original=Path.resolve
+        def escaped(path,*args,**kwargs):
+            if path==child:return outside
+            return original(path,*args,**kwargs)
+        with patch.object(Path,'resolve',escaped):
+            with self.assertRaisesRegex(ValueError,'outside'):core.safe_path(child,root)
+
+    def test_redirected_target_reparse_points_are_still_rejected(self):
+        import stat
+        from types import SimpleNamespace
+        logical=self.root/'logical';actual=self.root/'actual';logical.mkdir();actual.mkdir()
+        resolve=Path.resolve;lstat=Path.lstat
+        def redirected(path,*args,**kwargs):
+            return actual if path==logical else resolve(path,*args,**kwargs)
+        def metadata(path,*args,**kwargs):
+            return SimpleNamespace(st_mode=stat.S_IFDIR,st_file_attributes=0x400) if path==actual else lstat(path,*args,**kwargs)
+        with patch.object(Path,'resolve',redirected),patch.object(Path,'lstat',metadata):
+            with self.assertRaisesRegex(ValueError,'Linked'):core.safe_path(logical,logical)
+
     def test_portable_app_uses_user_profile_not_executable_parent(self):
         import sys
         with patch('runtime.Path.home', return_value=self.root / 'profile'), \
